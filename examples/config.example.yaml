@@ -1,0 +1,50 @@
+# Example samotate project configuration.
+#
+# Two ways to use it:
+#   samotate pipeline -c config.yaml --stage all   # headless auto-label + export
+#   samotate serve    -c config.yaml               # open the browser annotator
+#
+# ----------------------------------------------------------------------------
+name: retail-staff-customer
+
+# --- source: set exactly ONE of 'video' or 'images_dir' ---
+video: ./recordings/cam08_1h.mp4
+# images_dir: ./images
+
+root: ./dataset      # output / working directory
+fps: 1.0             # frames per second to sample (video sources only)
+# limit: 500         # cap number of frames (handy for a pilot run)
+
+# --- label classes; each may carry SAM text prompts for auto-labeling ---
+classes:
+  - id: 0
+    name: staff
+    color: "#ff3b30"
+    prompts:
+      - { text: "person wearing pink shirt", threshold: 0.5 }
+      - { text: "person wearing black cap and black uniform", threshold: 0.5 }
+      - { text: "person wearing white shirt and black tie", threshold: 0.5 }
+  - id: 1
+    name: customer
+    color: "#34c759"
+    prompts:
+      - { text: "person", threshold: 0.5 }
+  - id: 2
+    name: seated_diner          # override class used by the hierarchical strategy
+    prompts:
+      - { text: "diner seated at table", threshold: 0.6 }
+
+# --- how detections are resolved into final boxes ---
+# This reproduces the original staff/customer pipeline: the broad 'customer'
+# (person) class is the base, 'staff' is the specific subdivision, and a seated
+# diner overrides a staff match back to customer.
+reconcile:
+  strategy: hierarchical
+  base_class: customer
+  iou_threshold: 0.4
+  override_classes: [seated_diner]
+  override_iou: 0.5
+
+# --- export ---
+train_fraction: 0.8
+link_mode: copy      # 'copy' (works on Windows) or 'symlink'

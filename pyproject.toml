@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "samotate"
+version = "0.1.0"
+description = "Open-source, SAM-assisted image annotation tool with YOLO dataset export"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "samotate contributors" }]
+keywords = ["annotation", "labeling", "computer-vision", "yolo", "sam", "dataset"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+    "numpy>=1.24",
+    "pillow>=10.0",
+    "opencv-python-headless>=4.8",
+    "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+# Manual annotation needs none of this; install only for SAM-assisted auto-labeling.
+# NOTE: SAM 3.1 itself is a research package and is NOT on PyPI — see README.
+sam = ["torch>=2.1"]
+dev = ["pytest>=7.4", "httpx>=0.26", "ruff>=0.3"]
+
+[project.urls]
+Homepage = "https://github.com/your-org/samotate"
+Issues = "https://github.com/your-org/samotate/issues"
+
+[project.scripts]
+samotate = "samotate.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/samotate"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/samotate/server/static" = "samotate/server/static"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/samotate", "README.md", "LICENSE"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["B008"]  # FastAPI uses Depends() in defaults
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

@@ -1,0 +1,139 @@
+"""Configuration models for a samotate project.
+
+This replaces all the hardcoded constants in the original ``build_dataset``
+script (paths, prompts, thresholds) with a validated, YAML-backed config so the
+tool works for arbitrary classes and detection tasks rather than a single
+hardcoded retail video.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Literal, Optional
+
+import yaml
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class Prompt(BaseModel):
+    """A single SAM text prompt and the score threshold to keep its boxes."""
+
+    text: str
+    threshold: float = 0.5
+
+    @field_validator("threshold")
+    @classmethod
+    def _valid_threshold(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("threshold must be between 0 and 1")
+        return v
+
+
+class ClassDef(BaseModel):
+    """A label class: an id, a display name, and zero or more SAM prompts.
+
+    Prompts are optional — a class with no prompts is still fully usable for
+    manual annotation; it simply gets no SAM auto-suggestions.
+    """
+
+    id: int
+    name: str
+    prompts: list[Prompt] = Field(default_factory=list)
+    color: Optional[str] = None  # hex like "#ff0044"; UI picks one if omitted
+
+
+class ReconcileConfig(BaseModel):
+    """How overlapping detections are resolved into final boxes.
+
+    - ``per_prompt`` (default): every prompt hit becomes a box of its class;
+      overlapping boxes of the *same* class are de-duplicated by NMS.
+    - ``hierarchical``: reproduces the original staff/customer behavior — a
+      broad ``base_class`` is subdivided by more specific classes via IoU
+      matching, with optional override classes that win ties.
+    """
+
+    strategy: Literal["per_prompt", "hierarchical"] = "per_prompt"
+    iou_threshold: float = 0.4
+    nms_iou: float = 0.5
+    # hierarchical-only knobs
+    base_class: Optional[str] = None
+    override_classes: list[str] = Field(default_factory=list)
+    override_iou: float = 0.5
+
+
+class ProjectConfig(BaseModel):
+    """Top-level project configuration loaded from ``config.yaml``."""
+
+    name: str = "samotate-project"
+    # --- source: exactly one of video / images_dir ---
+    video: Optional[Path] = None
+    images_dir: Optional[Path] = None
+    # --- output / working dir ---
+    root: Path = Path("./dataset")
+    # --- frame sampling (video only) ---
+    fps: float = 1.0
+    limit: Optional[int] = None
+    # --- classes & detection ---
+    classes: list[ClassDef]
+    reconcile: ReconcileConfig = Field(default_factory=ReconcileConfig)
+    # --- export ---
+    train_fraction: float = 0.8
+    link_mode: Literal["copy", "symlink"] = "copy"
+
+    @model_validator(mode="after")
+    def _check_source_and_classes(self) -> "ProjectConfig":
+        if self.video is None and self.images_dir is None:
+            raise ValueError("config must set either 'video' or 'images_dir'")
+        if self.video is not None and self.images_dir is not None:
+            raise ValueError("set only one of 'video' or 'images_dir', not both")
+        if not self.classes:
+            raise ValueError("config must define at least one class")
+        ids = [c.id for c in self.classes]
+        if len(ids) != len(set(ids)):
+            raise ValueError("class ids must be unique")
+        names = [c.name for c in self.classes]
+        if len(names) != len(set(names)):
+            raise ValueError("class names must be unique")
+        if self.reconcile.strategy == "hierarchical":
+            if self.reconcile.base_class is None:
+                raise ValueError("hierarchical reconcile requires 'base_class'")
+            if self.reconcile.base_class not in names:
+                raise ValueError("reconcile.base_class must name an existing class")
+            for oc in self.reconcile.override_classes:
+                if oc not in names:
+                    raise ValueError(f"override class '{oc}' is not a defined class")
+        return self
+
+    # --- derived output paths (mirror the original build_dataset layout) ---
+    @property
+    def frames_dir(self) -> Path:
+        return self.root / "frames"
+
+    @property
+    def detections_dir(self) -> Path:
+        return self.root / "detections"
+
+    @property
+    def annotations_dir(self) -> Path:
+        return self.root / "annotations"
+
+    @property
+    def labels_dir(self) -> Path:
+        return self.root / "labels"
+
+    def class_by_name(self, name: str) -> ClassDef:
+        for c in self.classes:
+            if c.name == name:
+                return c
+        raise KeyError(name)
+
+    @classmethod
+    def from_yaml(cls, path: str | Path) -> "ProjectConfig":
+        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+        return cls.model_validate(data)
+
+    def to_yaml(self, path: str | Path) -> None:
+        data = self.model_dump(mode="json", exclude_none=True)
+        Path(path).write_text(
+            yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
