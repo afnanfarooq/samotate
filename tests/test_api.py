@@ -103,3 +103,62 @@ def test_export(client):
 
     result = client.post(f"/api/projects/{pid}/export", json={}).json()
     assert "data_yaml" in result
+
+
+def test_root_is_json_not_a_ui(client):
+    assert client.get("/").json()["docs"] == "/docs"
+
+
+def test_no_cors_headers(client):
+    resp = client.get("/api/health", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in resp.headers
+
+
+def test_non_slug_project_id_is_404(client):
+    assert client.get("/api/projects/..").status_code == 404
+    assert client.get("/api/projects/Demo").status_code == 404
+
+
+def test_save_annotation_validates_classes_and_uses_real_size(client):
+    pid = _create(client)
+    client.post(f"/api/projects/{pid}/extract")
+    name = client.get(f"/api/projects/{pid}/images").json()[0]["name"]
+    url = f"/api/projects/{pid}/images/{name}/annotation"
+
+    bad = {"image": name, "width": 60, "height": 80,
+           "boxes": [{"class_id": 7, "xyxy": [1, 2, 3, 4]}]}
+    assert client.put(url, json=bad).status_code == 400
+
+    lying = {"image": name, "width": 9999, "height": 9999, "boxes": []}
+    assert client.put(url, json=lying).status_code == 200
+    ann = client.get(url).json()
+    assert (ann["width"], ann["height"]) == (60, 80)
+
+
+def test_invalid_project_is_400_and_leaves_no_dir(client, tmp_path):
+    resp = client.post("/api/projects", json={
+        "name": "Gappy", "images_dir": client._images_dir,
+        "classes": [{"id": 0, "name": "a"}, {"id": 5, "name": "b"}],
+    })
+    assert resp.status_code == 400
+    assert not (tmp_path / "workspace" / "gappy").exists()
+
+
+def test_detect_without_sam_is_503(client):
+    from samotate.core.sam import NullBackend
+
+    pid = _create(client)
+    client.post(f"/api/projects/{pid}/extract")
+    client.app.state.samotate._backend = NullBackend()
+    resp = client.post(f"/api/projects/{pid}/detect")
+    assert resp.status_code == 503
+    assert "SAM backend unavailable" in resp.json()["detail"]
+
+
+def test_extract_bad_source_is_400(client):
+    resp = client.post("/api/projects", json={
+        "name": "Ghost", "images_dir": "/definitely/not/here",
+        "classes": [{"id": 0, "name": "a"}],
+    })
+    pid = resp.json()["id"]
+    assert client.post(f"/api/projects/{pid}/extract").status_code == 400

@@ -38,7 +38,7 @@ class ClassDef(BaseModel):
     id: int
     name: str
     prompts: list[Prompt] = Field(default_factory=list)
-    color: Optional[str] = None  # hex like "#ff0044"; UI picks one if omitted
+    color: Optional[str] = None  # hex like "#ff0044"; used by `preview`, auto-picked if omitted
 
 
 class ReconcileConfig(BaseModel):
@@ -52,12 +52,12 @@ class ReconcileConfig(BaseModel):
     """
 
     strategy: Literal["per_prompt", "hierarchical"] = "per_prompt"
-    iou_threshold: float = 0.4
-    nms_iou: float = 0.5
+    iou_threshold: float = Field(0.4, ge=0.0, le=1.0)
+    nms_iou: float = Field(0.5, ge=0.0, le=1.0)
     # hierarchical-only knobs
     base_class: Optional[str] = None
     override_classes: list[str] = Field(default_factory=list)
-    override_iou: float = 0.5
+    override_iou: float = Field(0.5, ge=0.0, le=1.0)
 
 
 class ProjectConfig(BaseModel):
@@ -70,17 +70,17 @@ class ProjectConfig(BaseModel):
     # --- output / working dir ---
     root: Path = Path("./dataset")
     # --- frame sampling (video only) ---
-    fps: float = 1.0
-    limit: Optional[int] = None
+    fps: float = Field(1.0, gt=0.0)
+    limit: Optional[int] = Field(None, gt=0)
     # --- classes & detection ---
     classes: list[ClassDef]
     reconcile: ReconcileConfig = Field(default_factory=ReconcileConfig)
     # --- export ---
-    train_fraction: float = 0.8
+    train_fraction: float = Field(0.8, gt=0.0, le=1.0)
     link_mode: Literal["copy", "symlink"] = "copy"
 
     @model_validator(mode="after")
-    def _check_source_and_classes(self) -> "ProjectConfig":
+    def _check_source_and_classes(self) -> ProjectConfig:
         if self.video is None and self.images_dir is None:
             raise ValueError("config must set either 'video' or 'images_dir'")
         if self.video is not None and self.images_dir is not None:
@@ -90,6 +90,12 @@ class ProjectConfig(BaseModel):
         ids = [c.id for c in self.classes]
         if len(ids) != len(set(ids)):
             raise ValueError("class ids must be unique")
+        # YOLO derives the class count from names: an id outside 0..N-1 makes
+        # Ultralytics reject the label ("exceeds dataset class count").
+        if sorted(ids) != list(range(len(ids))):
+            raise ValueError(
+                f"class ids must be 0..{len(ids) - 1} with no gaps (got {sorted(ids)})"
+            )
         names = [c.name for c in self.classes]
         if len(names) != len(set(names)):
             raise ValueError("class names must be unique")
@@ -127,8 +133,24 @@ class ProjectConfig(BaseModel):
         raise KeyError(name)
 
     @classmethod
-    def from_yaml(cls, path: str | Path) -> "ProjectConfig":
-        data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
+    def from_yaml(cls, path: str | Path) -> ProjectConfig:
+        """Load a config file.
+
+        Relative ``video``, ``images_dir`` and ``root`` paths are resolved
+        against the config file's directory, not the current working
+        directory, so ``samotate pipeline -c some/dir/config.yaml`` behaves the
+        same wherever it is run from.
+        """
+        path = Path(path)
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict):
+            raise ValueError(f"{path}: expected a YAML mapping at the top level")
+        base = path.resolve().parent
+        data.setdefault("root", "./dataset")
+        for key in ("video", "images_dir", "root"):
+            if data.get(key):
+                p = Path(data[key]).expanduser()
+                data[key] = str(p if p.is_absolute() else base / p)
         return cls.model_validate(data)
 
     def to_yaml(self, path: str | Path) -> None:

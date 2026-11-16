@@ -1,1 +1,1 @@
-"""FastAPI backend: serves the annotation API and the built frontend."""
+"""Optional FastAPI REST API exposing the pipeline and annotation storage."""

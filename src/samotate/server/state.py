@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..config import ClassDef, ProjectConfig
+from ..core.extract import list_frames
 from ..core.sam import SAMBackend
 
 
@@ -43,8 +44,7 @@ class Project:
             "name": cfg.name,
             "source": "video" if cfg.video else "images",
             "classes": [c.model_dump() for c in cfg.classes],
-            "n_frames": len(list(cfg.frames_dir.glob("*")))
-            if cfg.frames_dir.exists() else 0,
+            "n_frames": len(list_frames(cfg)),
         }
 
 
@@ -85,7 +85,7 @@ class ProjectStore:
             project_id = f"{slugify(name)}-{suffix}"
             base = self.workspace / project_id
             suffix += 1
-        base.mkdir(parents=True)
+        # validate before touching disk so a bad request leaves no empty dir
         cfg = ProjectConfig(
             name=name,
             video=Path(video) if video else None,
@@ -95,6 +95,7 @@ class ProjectStore:
             limit=limit,
             classes=classes,
         )
+        base.mkdir(parents=True)
         cfg.to_yaml(base / "config.yaml")
         return Project(project_id, base)
 
@@ -114,5 +115,6 @@ class AppState:
                 if self._backend is None:
                     from ..core.sam import load_backend
 
-                    self._backend = load_backend()
+                    # the API offers click prompts, so load the point head too
+                    self._backend = load_backend(points=True)
         return self._backend

@@ -1,8 +1,8 @@
 # Example samotate project configuration.
 #
-# Two ways to use it:
+# Usage:
 #   samotate pipeline -c config.yaml --stage all   # headless auto-label + export
-#   samotate serve    -c config.yaml               # open the browser annotator
+#   samotate preview  -c config.yaml               # draw boxes to check the labels
 #
 # ----------------------------------------------------------------------------
 name: retail-staff-customer

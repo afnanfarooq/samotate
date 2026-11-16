@@ -14,30 +14,30 @@
   <a href="#-quickstart"><b>Quickstart</b></a> ·
   <a href="#-how-it-works"><b>How it works</b></a> ·
   <a href="#%EF%B8%8F-configuration"><b>Configuration</b></a> ·
-  <a href="#-sam-setup-optional"><b>SAM setup</b></a> ·
+  <a href="#-sam-setup"><b>SAM setup</b></a> ·
   <a href="#%EF%B8%8F-development"><b>Development</b></a>
 </p>
 
 ---
 
-**samotate** is a local, browser-based annotator for object detection. You can draw and correct bounding boxes by hand, or have [Segment Anything (SAM)](#-sam-setup-optional) pre-label your images from plain-text prompts. When you're done, export a YOLO dataset that's ready to train.
+**samotate** is a command-line tool that auto-labels images for object detection. Point it at a video or an image folder, describe each class in plain text, and [Segment Anything (SAM)](#-sam-setup) draws the bounding boxes. It then exports a YOLO dataset that's ready to train.
 
 It works for **any classes you define**. Classes and prompts come from a YAML config, not from a fixed task.
 
 > [!NOTE]
-> samotate started as an internal script that auto-labeled retail *staff vs. customer* footage. It's now a general-purpose tool, and the original pipeline is the headless engine underneath the UI.
+> samotate started as an internal script that auto-labeled retail *staff vs. customer* footage. It's now a general-purpose tool: classes and prompts come from a config file instead of being hardcoded.
 
 ## ✨ Features
 
 <table>
   <tr>
     <td width="50%" valign="top">
-      <h4>🖱️ Interactive web annotator</h4>
-      Draw, move, resize and delete boxes on a canvas. Assign classes from the keyboard.
+      <h4>🧠 Text-prompt labeling</h4>
+      Describe each class in plain text, with a score threshold per prompt. SAM labels every frame.
     </td>
     <td width="50%" valign="top">
-      <h4>🧠 SAM assist <sub>(optional)</sub></h4>
-      Type a text prompt or click a point to get box suggestions, then accept the ones you want.
+      <h4>🔎 Headless review</h4>
+      <code>status</code> reports progress per stage, and <code>preview</code> draws the boxes onto image copies you can flip through.
     </td>
   </tr>
   <tr>
@@ -56,8 +56,8 @@ It works for **any classes you define**. Classes and prompts come from a YAML co
       Writes labels, a temporal train/val split and <code>data.yaml</code>, ready for Ultralytics YOLO.
     </td>
     <td valign="top">
-      <h4>⚙️ Headless pipeline</h4>
-      Auto-label and export from the command line, without opening the UI. Works well in scripts and CI.
+      <h4>⚙️ Scriptable</h4>
+      Run stages one at a time or all at once. Detections are cached, so re-runs skip work already done. A REST API is available too.
     </td>
   </tr>
 </table>
@@ -77,41 +77,42 @@ pip install "git+https://github.com/afnanfarooq/samotate.git"
 Then:
 
 ```bash
-samotate init      # writes a config.yaml for you to edit
-samotate serve     # starts the server and opens the annotator in your browser
+samotate init                                   # 1. write a config.yaml, then edit it
+samotate pipeline -c config.yaml --stage all    # 2. extract → detect → reconcile → export
+samotate status   -c config.yaml                # 3. check counts per stage and class
+samotate preview  -c config.yaml                # 4. draw boxes into dataset/preview/
 ```
 
-In the UI, the workflow is:
-
-1. **Create a project** from a video or an image folder.
-2. **Define your classes.**
-3. **Auto-detect** with SAM (optional).
-4. **Review and correct** the boxes.
-5. **Export.**
+Then train on `dataset/data.yaml`.
 
 > [!TIP]
-> Manual annotation works out of the box. SAM is an optional extra; see [SAM setup](#-sam-setup-optional).
+> Detection needs a SAM backend; see [SAM setup](#-sam-setup). Everything else runs without it.
 
 ## 🔍 How it works
 
-The UI and the headless pipeline run the same four stages:
+The pipeline has four stages, and each one writes its output under `root` so the next can pick it up:
 
 ```mermaid
 flowchart LR
     A["🎞️ <b>extract</b><br/>sample video frames<br/>or index image folder"] --> B["🧠 <b>detect</b><br/>SAM text prompts<br/>per class (cached)"]
     B --> C["🧩 <b>reconcile</b><br/>NMS / hierarchical<br/>IoU matching"]
-    C --> D["✍️ <b>review</b><br/>correct boxes in<br/>the web annotator"]
-    D --> E["📦 <b>export</b><br/>YOLO labels +<br/>train/val + data.yaml"]
-    C -. headless .-> E
+    C --> E["📦 <b>export</b><br/>YOLO labels +<br/>train/val + data.yaml"]
+    C -. check .-> D["🔎 <b>preview</b><br/>boxes drawn on<br/>image copies"]
 ```
+
+Re-running `reconcile` never overwrites an annotation marked `reviewed`, such as one saved through the REST API.
 
 ## ⌨️ CLI
 
 | Command | What it does |
 | --- | --- |
 | `samotate init [-o config.yaml] [--force]` | Writes a starter config to edit |
-| `samotate serve [-c config.yaml] [--host] [--port] [--no-browser]` | Starts the annotator (default `http://127.0.0.1:8000`) |
-| `samotate pipeline -c config.yaml --stage <stage>` | Runs the headless pipeline. `<stage>` is `extract`, `detect`, `reconcile`, `export` or `all` |
+| `samotate pipeline -c config.yaml --stage <stage>` | Runs the pipeline. `<stage>` is `extract`, `detect`, `reconcile`, `export` or `all` |
+| `samotate status -c config.yaml` | Shows frames, detections, annotations and labels, plus box counts per class |
+| `samotate preview -c config.yaml [-o dir] [-n N]` | Draws boxes onto image copies (default `<root>/preview/`) |
+| `samotate serve [-c config.yaml \| -w workspace] [--host] [--port]` | Starts the [REST API](#-rest-api) (default `http://127.0.0.1:8000`) |
+
+Errors such as a missing input or an invalid config print as one line. Add `-v` for the full traceback.
 
 <details>
 <summary><b>Pipeline flags</b></summary>
@@ -153,6 +154,9 @@ train_fraction: 0.8
 link_mode: copy               # 'copy' (Windows-safe) or 'symlink'
 ```
 
+- **Relative paths** resolve against the config file's directory, so the command works the same from any working directory.
+- **Class ids** must be `0..N-1` with no gaps. YOLO derives the class count from them.
+
 ### Reconcile strategies
 
 The reconcile step decides how raw SAM detections become final boxes:
@@ -160,7 +164,7 @@ The reconcile step decides how raw SAM detections become final boxes:
 | Strategy | Use it when | How it works |
 | --- | --- | --- |
 | `per_prompt` | Most tasks | Every detection becomes a box of its class, and overlapping same-class boxes are de-duplicated with NMS (`nms_iou`). |
-| `hierarchical` | One broad class split into finer ones | A broad `base_class` (e.g. *person*) is subdivided by more specific classes via IoU matching. Optional `override_classes` win ties. |
+| `hierarchical` | One broad class split into finer ones | Each class is de-duplicated first. Then a broad `base_class` (e.g. *person*) is subdivided by more specific classes via IoU matching. Optional `override_classes` win ties. |
 
 <details>
 <summary><b>Full example: the original <i>staff vs. customer</i> setup</b></summary>
@@ -218,7 +222,9 @@ dataset/
     └── val/
 ```
 
-The split is **temporal**: the first `train_fraction` of frames go to train and the rest to val. Neighbouring video frames are nearly identical, so a random split would leak them across train and val.
+The split is **temporal**: the first `train_fraction` of labeled frames go to train and the rest to val. Neighbouring video frames are nearly identical, so a random split would leak them across train and val.
+
+Boxes are clipped to the image bounds on export. Ultralytics drops all of an image's labels if any coordinate falls outside the image.
 
 You can train on it right away:
 
@@ -226,25 +232,33 @@ You can train on it right away:
 yolo detect train data=dataset/data.yaml model=yolo11n.pt
 ```
 
-## 🧠 SAM setup (optional)
+## 🧠 SAM setup
 
-You don't need anything extra for manual annotation. Text-prompt and click auto-labeling need a SAM backend.
+The `detect` stage needs a SAM backend. The other stages (`extract`, `reconcile`, `export`) and the `status` and `preview` commands don't.
 
 > [!IMPORTANT]
-> SAM 3.1 is a research package and is **not on PyPI**. Install PyTorch and the model by following the upstream instructions.
+> SAM 3 is a research package and is **not on PyPI**. Install it from [facebookresearch/sam3](https://github.com/facebookresearch/sam3). Its checkpoints are gated: request access on Hugging Face, then log in with `hf auth login`.
 
 ```bash
-pip install "samotate[sam]"   # installs torch
-# then install SAM 3.1 from source, following the upstream docs
+pip install "samotate[sam]"   # installs torch; pick the CUDA build that matches your GPU
+pip install "git+https://github.com/facebookresearch/sam3.git"
+
+# SAM 3 pins numpy<2 and imports a few packages it doesn't declare:
+pip install "numpy<2" "opencv-python-headless<4.12" einops "setuptools<81"
 ```
 
-The device is detected automatically. CUDA is used when available. CPU and Apple MPS also work, but they're slow.
+SAM 3 needs a Linux machine with an NVIDIA GPU. Its `triton` dependency doesn't run on macOS or native Windows, so on Windows use WSL2. samotate loads the SAM 3 image checkpoint (`facebook/sam3`).
 
-If no backend is installed, samotate runs in **manual-only mode**. Assist calls return a clear *"SAM not installed"* error (HTTP 503) instead of failing silently.
+The device is detected automatically: CUDA first, then Apple MPS, then CPU. To force one, set `SAMOTATE_DEVICE=cuda|mps|cpu`. Each image is encoded once and reused for all of its prompts.
+
+If the backend is missing or fails to load, `detect` stops with an error that says why (HTTP 503 from the API). It never writes empty detections.
 
 ## 🌐 REST API
 
-`samotate serve` runs a FastAPI backend. Interactive docs are at `/docs`.
+`samotate serve` runs a FastAPI server with the same operations, for scripting or a future UI. Interactive docs are at `/docs`.
+
+> [!WARNING]
+> The API has no authentication, and it can read any path you give it. Keep it on `127.0.0.1` (the default).
 
 <details>
 <summary><b>Endpoints</b></summary>
@@ -256,6 +270,7 @@ If no backend is installed, samotate runs in **manual-only mode**. Assist calls 
 | `GET` | `/api/projects/{id}` | Project details |
 | `POST` | `/api/projects/{id}/extract` | Gather or sample source images |
 | `POST` | `/api/projects/{id}/detect` | Run batch SAM detection |
+| `POST` | `/api/projects/{id}/reconcile` | Turn detections into annotations |
 | `POST` | `/api/projects/{id}/detect-interactive` | Get boxes for one text prompt or point click |
 | `GET` | `/api/projects/{id}/images` | List images |
 | `GET` | `/api/projects/{id}/images/{name}` | Fetch an image |
@@ -280,22 +295,22 @@ ruff check .       # lint
 
 ```text
 src/samotate/
-├── cli.py              # `samotate` entry point (init / serve / pipeline)
-├── config.py           # YAML project config
+├── cli.py              # `samotate` entry point
+├── config.py           # YAML project config + validation
 ├── models.py           # Box / Annotation models, YOLO serialization
-├── core/               # headless engine
+├── errors.py           # user-facing errors (printed without traceback)
+├── core/               # the pipeline
 │   ├── extract.py      #   stage 1 — frames / images
 │   ├── detect.py       #   stage 2 — SAM detection
 │   ├── reconcile.py    #   stage 3 — per_prompt / hierarchical
 │   ├── export.py       #   stage 4 — YOLO labels + split
+│   ├── review.py       #   status + preview
 │   ├── geometry.py     #   IoU, NMS
 │   └── sam.py          #   pluggable SAM backend
-└── server/             # FastAPI app + built frontend (static/)
+└── server/             # optional FastAPI REST API
 ```
 
 </details>
-
-The web UI is served from `src/samotate/server/static/`. If no frontend build is there, the server shows a placeholder page and the API under `/api` still works.
 
 ## 📄 License
 

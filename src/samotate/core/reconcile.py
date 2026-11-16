@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 
 from ..config import ProjectConfig
+from ..errors import SamotateError
 from ..models import Annotation, Box
 from .geometry import iou_xyxy, nms
 
@@ -45,6 +46,22 @@ def _reconcile_per_prompt(cfg: ProjectConfig, meta: dict) -> list[Box]:
     return boxes
 
 
+def _dedup(dets: list[dict], iou_threshold: float) -> list[dict]:
+    """NMS within one class's detections.
+
+    A class with several prompts usually gets several near-identical hits on
+    the same object; without this, every extra hit would become its own box.
+    """
+    if len(dets) < 2:
+        return dets
+    keep = nms(
+        [d["bbox_xyxy"] for d in dets],
+        [d.get("score", 1.0) for d in dets],
+        iou_threshold,
+    )
+    return [dets[i] for i in keep]
+
+
 def _reconcile_hierarchical(cfg: ProjectConfig, meta: dict) -> list[Box]:
     rc = cfg.reconcile
     base = cfg.class_by_name(rc.base_class)
@@ -54,15 +71,16 @@ def _reconcile_hierarchical(cfg: ProjectConfig, meta: dict) -> list[Box]:
         if c.name != base.name and c.name not in rc.override_classes
     ]
 
-    base_dets = meta["detections"].get(base.name, [])
-    override_dets = [
-        d for c in overrides for d in meta["detections"].get(c.name, [])
-    ]
+    def class_dets(name: str) -> list[dict]:
+        return _dedup(meta["detections"].get(name, []), rc.nms_iou)
+
+    base_dets = class_dets(base.name)
+    override_dets = [d for c in overrides for d in class_dets(c.name)]
     # flatten specific-class detections, remembering which class each came from
     specific_dets = [
         {**d, "_cls": c.id}
         for c in specific
-        for d in meta["detections"].get(c.name, [])
+        for d in class_dets(c.name)
     ]
 
     boxes: list[Box] = []
@@ -129,8 +147,10 @@ def reconcile_meta(cfg: ProjectConfig, meta: dict) -> Annotation:
 
 def reconcile_all(cfg: ProjectConfig) -> int:
     """Reconcile every cached detection into an annotation JSON. Returns count."""
-    cfg.annotations_dir.mkdir(parents=True, exist_ok=True)
     det_files = sorted(cfg.detections_dir.glob("*.json"))
+    if not det_files:
+        raise SamotateError("no cached detections; run the 'detect' stage first")
+    cfg.annotations_dir.mkdir(parents=True, exist_ok=True)
     logger.info("reconciling %d frames (strategy=%s)",
                 len(det_files), cfg.reconcile.strategy)
     n = 0
