@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "samotate"
-version = "0.1.0"
+dynamic = ["version"]  # read from src/samotate/__init__.py
 description = "SAM-assisted auto-labeling for object detection, with YOLO dataset export"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -13,8 +13,17 @@ authors = [{ name = "samotate contributors" }]
 keywords = ["annotation", "labeling", "computer-vision", "yolo", "sam", "dataset"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Scientific/Engineering :: Image Recognition",
 ]
 dependencies = [
@@ -29,17 +38,31 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Manual annotation needs none of this; install only for SAM-assisted auto-labeling.
-# NOTE: SAM 3.1 itself is a research package and is NOT on PyPI — see README.
-sam = ["torch>=2.1"]
+# Only the `detect` stage needs SAM. SAM 3 itself is NOT on PyPI (install it from
+# github.com/facebookresearch/sam3, see README); this extra adds what it needs but
+# doesn't declare, as found when running it (numpy<2 also rules out OpenCV 4.12+).
+sam = [
+    "torch>=2.1",
+    "torchvision",
+    "einops",
+    "pycocotools",
+    "psutil",
+    "numpy>=1.26,<2",
+    "opencv-python-headless>=4.8,<4.12",
+    "setuptools<81",  # sam3 still imports pkg_resources
+]
 dev = ["pytest>=7.4", "httpx>=0.26", "ruff>=0.3"]
 
 [project.urls]
 Homepage = "https://github.com/afnanfarooq/samotate"
+Source = "https://github.com/afnanfarooq/samotate"
 Issues = "https://github.com/afnanfarooq/samotate/issues"
 
 [project.scripts]
 samotate = "samotate.cli:main"
+
+[tool.hatch.version]
+path = "src/samotate/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/samotate"]
