@@ -1,8 +1,8 @@
-"""samotate — an open-source, SAM-assisted image annotation tool.
+"""samotate — SAM-assisted auto-labeling for object detection.
 
-A browser-based annotator for drawing and correcting bounding boxes, with an
-optional Segment Anything (SAM) assist for text-prompt and click auto-labeling,
-plus a headless pipeline for building YOLO-format detection datasets.
+A command-line pipeline that samples frames from a video or image folder,
+labels them with Segment Anything (SAM) text prompts, and exports a
+YOLO-format dataset. An optional REST API exposes the same operations.
 """
 
 __version__ = "0.1.0"

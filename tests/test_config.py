@@ -52,3 +52,32 @@ def test_yaml_roundtrip(tmp_path):
     assert loaded.classes[0].name == "cat"
     assert loaded.classes[0].prompts[0].text == "a cat"
     assert loaded.frames_dir == loaded.root / "frames"
+
+
+def test_relative_paths_resolve_against_config_dir(tmp_path, monkeypatch):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "config.yaml").write_text(
+        "images_dir: ./images\nclasses:\n  - {id: 0, name: a}\n", encoding="utf-8"
+    )
+    # run from somewhere else entirely
+    monkeypatch.chdir(tmp_path)
+    cfg = ProjectConfig.from_yaml("proj/config.yaml")
+    assert cfg.images_dir == proj.resolve() / "images"
+    assert cfg.root == proj.resolve() / "dataset"  # default root too
+
+
+def test_class_ids_must_be_contiguous(tmp_path):
+    with pytest.raises(ValidationError, match="no gaps"):
+        ProjectConfig(
+            images_dir=tmp_path,
+            classes=[ClassDef(id=0, name="a"), ClassDef(id=2, name="b")],
+        )
+
+
+@pytest.mark.parametrize(
+    "field", [{"fps": 0}, {"train_fraction": 0}, {"train_fraction": 1.5}, {"limit": 0}]
+)
+def test_numeric_bounds(tmp_path, field):
+    with pytest.raises(ValidationError):
+        ProjectConfig(images_dir=tmp_path, classes=_classes(), **field)
