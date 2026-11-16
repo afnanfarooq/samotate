@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://www.python.org/"><img alt="Python 3.9+" src="https://img.shields.io/badge/python-3.9%2B-3776AB?logo=python&logoColor=white"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-34d399"></a>
-  <a href="https://fastapi.tiangolo.com/"><img alt="FastAPI" src="https://img.shields.io/badge/backend-FastAPI-009688?logo=fastapi&logoColor=white"></a>
+  <img alt="Interface: CLI" src="https://img.shields.io/badge/interface-CLI-4b5563?logo=gnubash&logoColor=white">
   <img alt="Export: YOLO" src="https://img.shields.io/badge/export-YOLO-111F68">
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-f59e0b">
 </p>
@@ -57,18 +57,14 @@ It works for **any classes you define**. Classes and prompts come from a YAML co
     </td>
     <td valign="top">
       <h4>⚙️ Scriptable</h4>
-      Run stages one at a time or all at once. Detections are cached, so re-runs skip work already done. A REST API is available too.
+      Run stages one at a time or all at once. Detections are cached per frame, so re-running skips frames SAM has already seen. A REST API is available too.
     </td>
   </tr>
 </table>
 
 ## 🚀 Quickstart
 
-```bash
-pip install samotate
-```
-
-Or install from source:
+samotate isn't on PyPI yet, so install it from GitHub:
 
 ```bash
 pip install "git+https://github.com/afnanfarooq/samotate.git"
@@ -112,7 +108,7 @@ Re-running `reconcile` never overwrites an annotation marked `reviewed`, such as
 | `samotate preview -c config.yaml [-o dir] [-n N]` | Draws boxes onto image copies (default `<root>/preview/`) |
 | `samotate serve [-c config.yaml \| -w workspace] [--host] [--port]` | Starts the [REST API](#-rest-api) (default `http://127.0.0.1:8000`) |
 
-Errors such as a missing input or an invalid config print as one line. Add `-v` for the full traceback.
+Errors such as a missing input or an invalid config print as one line. For debug logging and full tracebacks, put `-v` before the command: `samotate -v pipeline …`.
 
 <details>
 <summary><b>Pipeline flags</b></summary>
@@ -122,7 +118,6 @@ Errors such as a missing input or an invalid config print as one line. Add `-v` 
 | `--force` | off | Re-run `detect` even when cached detections exist |
 | `--every N` | `1` | Export only every N-th frame (thins out near-duplicate video frames) |
 | `--offset K` | `0` | Starting frame when using `--every` |
-| `-v, --verbose` | off | Debug logging |
 
 </details>
 
@@ -209,18 +204,25 @@ The broad `customer` (person) class is the base, `staff` subdivides it, and a se
 
 ## 📦 Output
 
-Export writes a standard Ultralytics layout under `root`:
+Everything goes under `root`. Export writes a standard Ultralytics layout next to the pipeline's working folders:
 
 ```text
 dataset/
-├── data.yaml          # path, train/val dirs, class names
+├── data.yaml          # path, train/val dirs, class names   ← train on this
 ├── images/
 │   ├── train/
 │   └── val/
-└── labels/
-    ├── train/         # one YOLO .txt per image
-    └── val/
+├── labels/
+│   ├── train/         # one YOLO .txt per image
+│   ├── val/
+│   └── *.txt          # all labels before the split
+├── frames/            # extracted / copied source images
+├── detections/        # raw SAM hits per frame (the detect cache)
+├── annotations/       # reconciled boxes per frame (JSON)
+└── preview/           # images with boxes drawn, from `samotate preview`
 ```
+
+To re-run detection from scratch, delete `detections/` or pass `--force`.
 
 The split is **temporal**: the first `train_fraction` of labeled frames go to train and the rest to val. Neighbouring video frames are nearly identical, so a random split would leak them across train and val.
 
@@ -240,7 +242,8 @@ The `detect` stage needs a SAM backend. The other stages (`extract`, `reconcile`
 > SAM 3 is a research package and is **not on PyPI**. Install it from [facebookresearch/sam3](https://github.com/facebookresearch/sam3). Its checkpoints are gated: request access on Hugging Face, then log in with `hf auth login`.
 
 ```bash
-pip install "samotate[sam]"   # installs torch; pick the CUDA build that matches your GPU
+# PyTorch with CUDA. RTX 50-series (Blackwell) cards need the CUDA 12.8+ build:
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install "git+https://github.com/facebookresearch/sam3.git"
 
 # SAM 3 pins numpy<2 and imports a few packages it doesn't declare:
@@ -249,7 +252,7 @@ pip install "numpy<2" "opencv-python-headless<4.12" einops "setuptools<81"
 
 SAM 3 needs a Linux machine with an NVIDIA GPU. Its `triton` dependency doesn't run on macOS or native Windows, so on Windows use WSL2. samotate loads the SAM 3 image checkpoint (`facebook/sam3`).
 
-The device is detected automatically: CUDA first, then Apple MPS, then CPU. To force one, set `SAMOTATE_DEVICE=cuda|mps|cpu`. Each image is encoded once and reused for all of its prompts.
+samotate uses the GPU automatically and falls back to CPU, which works but is very slow. To force a device, set `SAMOTATE_DEVICE=cuda` or `SAMOTATE_DEVICE=cpu`. Each image is encoded once and reused for all of its prompts.
 
 If the backend is missing or fails to load, `detect` stops with an error that says why (HTTP 503 from the API). It never writes empty detections.
 
@@ -311,6 +314,14 @@ src/samotate/
 ```
 
 </details>
+
+## 🚧 Known limitations
+
+samotate is alpha. These are known gaps:
+
+- **SAM 3, not 3.1:** detection uses the SAM 3 image checkpoint. Loading the SAM 3.1 checkpoint isn't supported yet.
+- **Re-extracting doesn't clean up:** extracting again with a different `fps` or `limit` leaves the old frames in `frames/` alongside the new ones. Use a fresh `root` when you change sampling.
+- **Long videos extract slowly:** frames are read sequentially, so every frame of the video is decoded, even the ones that aren't kept. Use `limit` for pilot runs on long 4K footage.
 
 ## 📄 License
 
